@@ -1,14 +1,14 @@
 import { Request, Response } from 'express';
 import Property from '../models/Property';
-
+import User from '../models/User';
 import { createPropertySchema, updatePropertySchema } from '../schemas/propertySchema';
-
+import redisCache, { RedisCache } from '../services/redisCache';
 import mongoose from 'mongoose';
 import csv from 'csv-parser';
 import fs from 'fs';
 import path from 'path';
 
-// Define interface for authenticated request
+
 
 interface AuthRequest extends Request {
  
@@ -118,6 +118,10 @@ const addProperty = async (req: AuthRequest, res: Response) => {
     
     await newProperty.save();
     console.log('Property after save, propertyId:', newProperty.propertyId);
+    
+    // Invalidate related caches
+    await redisCache.invalidatePropertyCaches();
+    
     return res.status(201).json({
       message: 'Property created successfully',
       property: newProperty
@@ -133,23 +137,39 @@ const addProperty = async (req: AuthRequest, res: Response) => {
 
 const getAllProperties = async (req: AuthRequest, res: Response) => {
   try {
+    // Check cache first
+    const cacheKey = RedisCache.KEYS.ALL_PROPERTIES;
+    const cachedProperties = await redisCache.get(cacheKey);
+    
+    if (cachedProperties) {
+      console.log('🔥 Cache hit for all properties');
+      return res.status(200).json({
+        ...cachedProperties,
+        cached: true
+      });
+    }
+
+    console.log('💾 Cache miss for all properties, querying database');
+
     const properties = await Property.find()
       .populate('createdBy', 'firstName lastName email')
       .sort({ createdAt: -1 });
     
-    res.status(200).json({
+    const responseData = {
       message: 'Properties retrieved successfully',
       count: properties.length,
-      properties
-    });
+      properties,
+      cached: false
+    };
 
+    // Cache the result for 10 minutes
+    await redisCache.set(cacheKey, responseData, RedisCache.TTL.ALL_PROPERTIES);
 
+   return res.status(200).json(responseData);
 
-  } 
-  
-  catch (error) {
+  } catch (error) {
     console.error('Error fetching properties:', error);
-    res.status(500).json({ 
+    return res.status(500).json({ 
       error: 'Server error in getting properties',
       details: error instanceof Error ? error.message : 'Unknown error'
     });
@@ -160,12 +180,8 @@ const getAllProperties = async (req: AuthRequest, res: Response) => {
 
 
 const advancedSearch = async (req: Request, res: Response) => {
-
-
-
   try {
-    const 
-    {
+    const {
       search,
       type,
       listingType,
@@ -195,15 +211,27 @@ const advancedSearch = async (req: Request, res: Response) => {
       limit = 20
     }: SearchQuery = req.query;
 
+    // Generate cache key based on all search parameters
+    const cacheKey = redisCache.generateSearchKey(req.query);
+    
+    // Try to get cached result first
+    const cachedResult = await redisCache.get(cacheKey);
+    if (cachedResult) {
+      console.log(`🔥 Cache hit for search: ${cacheKey}`);
+      return res.status(200).json({
+        ...cachedResult,
+        cached: true,
+        cacheKey: cacheKey
+      });
+    }
 
+    console.log(`💾 Cache miss for search: ${cacheKey}`);
 
     // Build the filter object
     const filter: any = {};
 
     // Text search across multiple fields
     if (search) {
-
-
       filter.$or = [
         { title: { $regex: search, $options: 'i' } },
         { description: { $regex: search, $options: 'i' } },
@@ -212,10 +240,6 @@ const advancedSearch = async (req: Request, res: Response) => {
         { city: { $regex: search, $options: 'i' } },
         { tags: { $in: [new RegExp(search, 'i')] } }
       ];
-
-
-
-      
     }
 
     // Type filter (supports multiple values)
@@ -223,17 +247,13 @@ const advancedSearch = async (req: Request, res: Response) => {
       filter.type = Array.isArray(type) ? { $in: type } : type;
     }
 
-
     // Listing type filter
-    if (listingType)
-      {
+    if (listingType) {
       filter.listingType = Array.isArray(listingType) ? { $in: listingType } : listingType;
-    
     }
 
     // Furnished filter
-    if (furnished) 
-      {
+    if (furnished) {
       filter.furnished = Array.isArray(furnished) ? { $in: furnished } : furnished;
     }
 
@@ -256,85 +276,70 @@ const advancedSearch = async (req: Request, res: Response) => {
     }
 
     // Price range filter
-    if (minPrice || maxPrice) 
-      {
+    if (minPrice || maxPrice) {
       filter.price = {};
       if (minPrice) filter.price.$gte = Number(minPrice);
       if (maxPrice) filter.price.$lte = Number(maxPrice);
     }
 
     // Area range filter
-   
-    if (minArea || maxArea)
-       {
-
-
+    if (minArea || maxArea) {
       filter.areaSqFt = {};
       if (minArea) filter.areaSqFt.$gte = Number(minArea);
       if (maxArea) filter.areaSqFt.$lte = Number(maxArea);
-
     }
 
     // Bedrooms filter
-    if (bedrooms) 
-      {
+    if (bedrooms) {
       filter.bedrooms = Array.isArray(bedrooms) 
         ? { $in: bedrooms.map(Number) } 
         : Number(bedrooms);
     }
 
     // Bathrooms filter
-    if (bathrooms) 
-      {
+    if (bathrooms) {
       filter.bathrooms = Array.isArray(bathrooms) 
         ? { $in: bathrooms.map(Number) } 
         : Number(bathrooms);
     }
 
     // Rating filter
-    if (minRating || maxRating) 
-      {
+    if (minRating || maxRating) {
       filter.rating = {};
       if (minRating) filter.rating.$gte = Number(minRating);
       if (maxRating) filter.rating.$lte = Number(maxRating);
     }
 
     // Boolean filters
-    if (isVerified !== undefined) 
-      {
+    if (isVerified !== undefined) {
       const verified = typeof isVerified === 'string' ? isVerified === 'true' : isVerified;
       filter.isVerified = verified;
     }
 
-    if (isAvailable !== undefined) 
-      {
+    if (isAvailable !== undefined) {
       const available = typeof isAvailable === 'string' ? isAvailable === 'true' : isAvailable;
       filter.isAvailable = available;
     }
 
     // Date filters
-    if (availableFrom) 
-      {
+    if (availableFrom) {
       filter.availableFrom = { $lte: new Date(availableFrom as string) };
     }
 
-    if (createdAfter || createdBefore) 
-      {
+    if (createdAfter || createdBefore) {
       filter.createdAt = {};
       if (createdAfter) filter.createdAt.$gte = new Date(createdAfter as string);
       if (createdBefore) filter.createdAt.$lte = new Date(createdBefore as string);
     }
 
     // Amenities filter (contains any of the specified amenities)
-    if (amenities) 
-      {
+    if (amenities) {
       const amenityArray = Array.isArray(amenities) ? amenities : [amenities];
       filter.amenities = { $in: amenityArray };
     }
 
     // Tags filter
-    if (tags) 
-      {
+    if (tags) {
       const tagArray = Array.isArray(tags) ? tags : [tags];
       filter.tags = { $in: tagArray };
     }
@@ -364,7 +369,7 @@ const advancedSearch = async (req: Request, res: Response) => {
     const hasNextPage = pageNum < totalPages;
     const hasPrevPage = pageNum > 1;
 
-    return res.status(200).json({
+    const responseData = {
       success: true,
       message: 'Properties retrieved successfully',
       data: {
@@ -381,8 +386,14 @@ const advancedSearch = async (req: Request, res: Response) => {
           applied: Object.keys(req.query).length,
           resultsFound: total
         }
-      }
-    });
+      },
+      cached: false
+    };
+
+    // Cache the result for future requests
+    await redisCache.set(cacheKey, responseData, RedisCache.TTL.SEARCH_RESULTS);
+
+    return res.status(200).json(responseData);
 
   } catch (error) {
     console.error('Error in advanced search:', error);
@@ -397,6 +408,20 @@ const advancedSearch = async (req: Request, res: Response) => {
 // Get unique filter values for frontend dropdowns
 const getFilterOptions = async (req: Request, res: Response) => {
   try {
+    // Check cache first
+    const cacheKey = RedisCache.KEYS.FILTER_OPTIONS;
+    const cachedOptions = await redisCache.get(cacheKey);
+    
+    if (cachedOptions) {
+      console.log('🔥 Cache hit for filter options');
+      return res.status(200).json({
+        ...cachedOptions,
+        cached: true
+      });
+    }
+
+    console.log('💾 Cache miss for filter options, querying database');
+
     const [
       types,
       listingTypes,
@@ -441,7 +466,7 @@ const getFilterOptions = async (req: Request, res: Response) => {
       Property.distinct('bathrooms')
     ]);
 
-    return res.status(200).json({
+    const responseData = {
       success: true,
       data: {
         types,
@@ -456,8 +481,14 @@ const getFilterOptions = async (req: Request, res: Response) => {
         areaRange: areaRange[0] || { minArea: 0, maxArea: 0 },
         bedroomOptions: bedroomRange.filter(val => val !== null).sort((a, b) => a - b),
         bathroomOptions: bathroomRange.filter(val => val !== null).sort((a, b) => a - b)
-      }
-    });
+      },
+      cached: false
+    };
+
+    // Cache the result for 1 hour
+    await redisCache.set(cacheKey, responseData, RedisCache.TTL.FILTER_OPTIONS);
+
+    return res.status(200).json(responseData);
 
   } catch (error) {
     console.error('Error getting filter options:', error);
@@ -555,6 +586,10 @@ const updateProperty = async (req: AuthRequest, res: Response) => {
     if (!updatedProperty) {
       return res.status(404).json({ error: 'Property not found' });
     }
+    
+    // Invalidate related caches
+    await redisCache.invalidatePropertyCaches();
+    
     return res.status(200).json({
       message: 'Property updated successfully',
       property: updatedProperty
@@ -590,6 +625,10 @@ const deleteProperty = async (req: AuthRequest, res: Response) => {
     if (!deletedProperty) {
       return res.status(404).json({ error: 'Property not found' });
     }
+    
+    // Invalidate related caches
+    await redisCache.invalidatePropertyCaches();
+    
     return res.status(200).json({
       message: 'Property deleted successfully',
       property: deletedProperty
@@ -815,6 +854,11 @@ const addPropertyByDataImport = async (req: AuthRequest, res: Response) => {
     // Prepare response
     const responseMessage = `Import completed. Processed ${results.processedFiles}/${results.totalFiles} files, ${results.successfulInserts}/${results.totalRecords} records inserted successfully.`;
     
+    // Invalidate caches if any properties were successfully inserted
+    if (results.successfulInserts > 0) {
+      await redisCache.invalidatePropertyCaches();
+    }
+    
     if (results.successfulInserts === 0) {
       return res.status(400).json({
         message: 'No properties were imported successfully',
@@ -857,6 +901,233 @@ const addPropertyByDataImport = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// Add property to user's favorites
+const addToFavorites = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const { propertyId } = req.params;
+    const userId = req.user._id;
+
+    // Validate propertyId format
+    if (!mongoose.Types.ObjectId.isValid(propertyId)) {
+      return res.status(400).json({ error: 'Invalid property ID format' });
+    }
+
+    // Check if property exists
+    const property = await Property.findById(propertyId);
+    if (!property) {
+      return res.status(404).json({ error: 'Property not found' });
+    }
+
+    // Find user and add to favorites
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check if property is already in favorites
+    if (user.isFavorite(propertyId)) {
+      return res.status(400).json({ 
+        error: 'Property is already in favorites',
+        isFavorite: true 
+      });
+    }
+
+    // Add to favorites
+    await user.addToFavorites(propertyId);
+
+    // Invalidate user-specific cache if you have one
+    await redisCache.delete(`user_favorites_${userId}`);
+
+    return res.status(200).json({
+      message: 'Property added to favorites successfully',
+      propertyId: propertyId,
+      propertyTitle: property.title,
+      isFavorite: true
+    });
+
+  } catch (error) {
+    console.error('Error adding property to favorites:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+};
+
+// Remove property from user's favorites
+const removeFromFavorites = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const { propertyId } = req.params;
+    const userId = req.user._id;
+
+    // Validate propertyId format
+    if (!mongoose.Types.ObjectId.isValid(propertyId)) {
+      return res.status(400).json({ error: 'Invalid property ID format' });
+    }
+
+    // Find user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check if property is in favorites
+    if (!user.isFavorite(propertyId)) {
+      return res.status(400).json({ 
+        error: 'Property is not in favorites',
+        isFavorite: false 
+      });
+    }
+
+    // Remove from favorites
+    await user.removeFromFavorites(propertyId);
+
+    // Invalidate user-specific cache if you have one
+    await redisCache.delete(`user_favorites_${userId}`);
+
+    return res.status(200).json({
+      message: 'Property removed from favorites successfully',
+      propertyId: propertyId,
+      isFavorite: false
+    });
+
+  } catch (error) {
+    console.error('Error removing property from favorites:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+};
+
+// Get user's favorite properties
+const getFavoriteProperties = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const userId = req.user._id;
+    const { page = 1, limit = 10 } = req.query;
+
+    // Check cache first
+    const cacheKey = `user_favorites_${userId}_page_${page}_limit_${limit}`;
+    const cachedFavorites = await redisCache.get(cacheKey);
+    
+    if (cachedFavorites) {
+      console.log('🔥 Cache hit for user favorites');
+      return res.status(200).json({
+        ...cachedFavorites,
+        cached: true
+      });
+    }
+
+    console.log('💾 Cache miss for user favorites, querying database');
+
+    // Calculate pagination
+    const pageNum = Number(page);
+    const limitNum = Number(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Find user with populated favorite properties
+    const user = await User.findById(userId)
+      .populate({
+        path: 'favoriteProperties',
+        populate: {
+          path: 'createdBy',
+          select: 'firstName lastName email'
+        },
+        options: {
+          skip: skip,
+          limit: limitNum,
+          sort: { createdAt: -1 }
+        }
+      });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Get total count of favorite properties
+    const totalFavorites = user.favoriteProperties.length;
+    const totalPages = Math.ceil(totalFavorites / limitNum);
+
+    const responseData = {
+      message: 'Favorite properties retrieved successfully',
+      data: {
+        favoriteProperties: user.favoriteProperties,
+        pagination: {
+          currentPage: pageNum,
+          totalPages,
+          totalFavorites,
+          favoritesPerPage: limitNum,
+          hasNextPage: pageNum < totalPages,
+          hasPrevPage: pageNum > 1
+        }
+      },
+      cached: false
+    };
+
+    // Cache the result for 5 minutes
+    await redisCache.set(cacheKey, responseData, 300);
+
+    return res.status(200).json(responseData);
+
+  } catch (error) {
+    console.error('Error fetching favorite properties:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+};
+
+// Check if a property is in user's favorites
+const checkFavoriteStatus = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const { propertyId } = req.params;
+    const userId = req.user._id;
+
+    // Validate propertyId format
+    if (!mongoose.Types.ObjectId.isValid(propertyId)) {
+      return res.status(400).json({ error: 'Invalid property ID format' });
+    }
+
+    // Find user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check favorite status
+    const isFavorite = user.isFavorite(propertyId);
+
+    return res.status(200).json({
+      propertyId: propertyId,
+      isFavorite: isFavorite
+    });
+
+  } catch (error) {
+    console.error('Error checking favorite status:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+};
+
 export { 
   addProperty, 
   getAllProperties, 
@@ -866,5 +1137,9 @@ export {
   getPropertyById,
   advancedSearch,
   getFilterOptions,
-  addPropertyByDataImport 
+  addPropertyByDataImport,
+  addToFavorites,
+  removeFromFavorites,
+  getFavoriteProperties,
+  checkFavoriteStatus
 };

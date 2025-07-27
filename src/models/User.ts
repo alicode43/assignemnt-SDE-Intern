@@ -9,11 +9,15 @@ export interface IUser extends Document {
   lastName: string;
   role: 'user' | 'admin';
   refreshToken: string;
+  favoriteProperties: mongoose.Types.ObjectId[];
   createdAt: Date;
   updatedAt: Date;
   comparePassword(candidatePassword: string): Promise<boolean>;
   generateAccessToken(): string;
   generateRefreshToken(): string;
+  addToFavorites(propertyId: string): Promise<IUser>;
+  removeFromFavorites(propertyId: string): Promise<IUser>;
+  isFavorite(propertyId: string): boolean;
 }
 
 const UserSchema: Schema = new Schema({
@@ -46,8 +50,11 @@ const UserSchema: Schema = new Schema({
   },
   refreshToken: {
     type: String,
-  
-  }
+  },
+  favoriteProperties: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Property'
+  }]
 }, {
   timestamps: true
 });
@@ -97,6 +104,39 @@ UserSchema.methods.generateRefreshToken = function() {
 // Compare password method
 UserSchema.methods.comparePassword = async function(candidatePassword: string): Promise<boolean> {
   return bcrypt.compare(candidatePassword, this.password);
+};
+
+// Add property to favorites
+UserSchema.methods.addToFavorites = async function(propertyId: string): Promise<IUser> {
+  const propertyObjectId = new mongoose.Types.ObjectId(propertyId);
+  
+  if (!this.favoriteProperties.includes(propertyObjectId)) {
+    this.favoriteProperties.push(propertyObjectId);
+    await this.save();
+  }
+  
+  return this as IUser;
+};
+
+// Remove property from favorites
+UserSchema.methods.removeFromFavorites = async function(propertyId: string): Promise<IUser> {
+  const propertyObjectId = new mongoose.Types.ObjectId(propertyId);
+  
+  this.favoriteProperties = this.favoriteProperties.filter(
+    (id: mongoose.Types.ObjectId) => !id.equals(propertyObjectId)
+  );
+  
+  await this.save();
+  return this as IUser;
+};
+
+// Check if property is in favorites
+UserSchema.methods.isFavorite = function(propertyId: string): boolean {
+  const propertyObjectId = new mongoose.Types.ObjectId(propertyId);
+  
+  return this.favoriteProperties.some(
+    (id: mongoose.Types.ObjectId) => id.equals(propertyObjectId)
+  );
 };
  
 export default mongoose.model<IUser>('User', UserSchema);
