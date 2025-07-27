@@ -3,13 +3,10 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import cookieParser from 'cookie-parser';
-
- 
+import path from 'path';
 import { Request, Response, NextFunction } from 'express';
-// import morgan from 'morgan';
 
-// Load environment variables
-dotenv.config({ debug: false }); // Suppress dotenv logs
+dotenv.config({ debug: false });
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,13 +16,14 @@ app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
 
-// Serve static files
-app.use(express.static('public'));
+// Serve static files - fix path for production
+const publicPath = path.join(__dirname, '../public');
+app.use(express.static(publicPath));
 
 // Database connection
 const connectDB = async () => {
   try {
-    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/hyper-gro');
+    await mongoose.connect(process.env.MONGODB_URI || '');
     console.log('MongoDB connected successfully');
   } catch (error) {
     console.error('Database connection error:', error);
@@ -45,19 +43,15 @@ app.get('/', (req, res) => {
 });
 
 
-// Error handling middleware
-
- 
 
 
 // Import routes
 import userRoutes from './routes/userRoutes';
 import propertyRoutes from './routes/propertyRoutes';
-// import dataImportRoutes from './routes/dataImportRoutes';
+
 
 app.use('/api/users', userRoutes);
 app.use('/api/properties', propertyRoutes);
-// app.use('/api/data', dataImportRoutes);
 
 
 // Start server
