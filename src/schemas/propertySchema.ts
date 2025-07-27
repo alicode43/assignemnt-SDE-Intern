@@ -98,7 +98,12 @@ export const createPropertySchema = z.object({
     .optional(),
   
   isAvailable: z.boolean()
-    .default(true)
+    .default(true),
+    
+  // createdBy is optional in schema since it's handled by controller from authenticated user
+  createdBy: z.string()
+    .regex(/^[0-9a-fA-F]{24}$/, 'Invalid user ID format')
+    .optional()
 });
 
 // Define the property update schema (all fields optional except id)

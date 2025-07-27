@@ -8,7 +8,8 @@
     "dev": "nodemon src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "import-csv": "ts-node scripts/importCsv.ts",
+    "import-csv": "ts-node import-data.ts",
+    "import-data": "ts-node import-data.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

@@ -73,7 +73,7 @@ UserSchema.methods.generateAccessToken = function() {
       email: this.email,
       role: this.role
     },
-    process.env.JWT_SECRET || 'default_access_secret_key',
+    process.env.JWT_SECRET || 'hamar_secret_key',
     {
       expiresIn: process.env.accessTokenExpiry || '1d'
     } as jwt.SignOptions
@@ -87,7 +87,7 @@ UserSchema.methods.generateRefreshToken = function() {
       _id: this._id,
    
     },
-    process.env.REFRESH_TOKEN_SECRET || 'default_refresh_secret_key',
+    process.env.REFRESH_TOKEN_SECRET || 'hamar_secret_key',
     {
       expiresIn: process.env.refreshTokenExpiry || '7d'
     } as jwt.SignOptions

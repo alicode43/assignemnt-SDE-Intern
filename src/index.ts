@@ -19,6 +19,9 @@ app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
 
+// Serve static files
+app.use(express.static('public'));
+
 // Database connection
 const connectDB = async () => {
   try {
@@ -50,8 +53,11 @@ app.get('/', (req, res) => {
 // Import routes
 import userRoutes from './routes/userRoutes';
 import propertyRoutes from './routes/propertyRoutes';
+// import dataImportRoutes from './routes/dataImportRoutes';
+
 app.use('/api/users', userRoutes);
 app.use('/api/properties', propertyRoutes);
+// app.use('/api/data', dataImportRoutes);
 
 
 // Start server
