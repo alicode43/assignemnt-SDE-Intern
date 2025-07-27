@@ -33,7 +33,7 @@
   "include": [
     "src/**/*",
     "scripts/**/*"
-  ],
+, "dist"  ],
   "exclude": [
     "node_modules",
     "dist",
